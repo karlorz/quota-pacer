@@ -1578,3 +1578,212 @@ func TestEnsureUniquePriorities_StillCorrectsGenuineNonTierCollision(t *testing.
 			items[1].Priority, items[2].Priority)
 	}
 }
+
+func TestPlanFreshOnly_UserDisabledCredential_PreservedAndNotReEnabled(t *testing.T) {
+	now := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	resetAt := now.Add(2 * time.Hour)
+	rem := int64(80)
+
+	credentials := []core.Credential{
+		{
+			Name:      "claude-user-disabled",
+			AuthIndex: "auth-disabled-1",
+			Provider:  core.ProviderClaude,
+			Type:      core.CredentialTypeClaude,
+			Priority:  10,
+			Disabled:  true,
+		},
+		{
+			Name:      "claude-enabled",
+			AuthIndex: "auth-enabled-1",
+			Provider:  core.ProviderClaude,
+			Type:      core.CredentialTypeClaude,
+			Priority:  20,
+			Disabled:  false,
+		},
+	}
+
+	evidence := []ProbeEvidence{
+		{
+			Provider:      core.ProviderClaude,
+			AuthIndex:     "auth-disabled-1",
+			ObservedAt:    now,
+			ResetAt:       &resetAt,
+			Remaining:     &rem,
+			Freshness:     core.FreshnessFresh,
+			ProbeStatus:   core.ProbeStatusReady,
+			Status:        EvidenceStatusReady,
+			PlanType:      core.PlanTypePro,
+			EvidenceFresh: true,
+		},
+		{
+			Provider:      core.ProviderClaude,
+			AuthIndex:     "auth-enabled-1",
+			ObservedAt:    now,
+			ResetAt:       &resetAt,
+			Remaining:     &rem,
+			Freshness:     core.FreshnessFresh,
+			ProbeStatus:   core.ProbeStatusReady,
+			Status:        EvidenceStatusReady,
+			PlanType:      core.PlanTypePro,
+			EvidenceFresh: true,
+		},
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
+
+	var disabledItem *PlanItem
+	var enabledItem *PlanItem
+	for i := range plan.Items {
+		if plan.Items[i].Credential.AuthIndex == "auth-disabled-1" {
+			disabledItem = &plan.Items[i]
+		} else if plan.Items[i].Credential.AuthIndex == "auth-enabled-1" {
+			enabledItem = &plan.Items[i]
+		}
+	}
+
+	if disabledItem == nil || enabledItem == nil {
+		t.Fatalf("expected both items in plan, got disabledItem=%v enabledItem=%v", disabledItem, enabledItem)
+	}
+
+	// 禁用账号不得被自动开启，且不得作为健康 tier 成员提升优先级
+	if !disabledItem.Disabled {
+		t.Errorf("expected disabled credential to remain Disabled=true, got Disabled=false")
+	}
+	if disabledItem.Priority != 10 {
+		t.Errorf("expected disabled credential Priority to remain 10, got %d", disabledItem.Priority)
+	}
+	if disabledItem.Weight != 0 {
+		t.Errorf("expected disabled credential Weight to be 0, got %d", disabledItem.Weight)
+	}
+	if isFreshPositiveTierMember(*disabledItem) {
+		t.Errorf("expected isFreshPositiveTierMember=false for disabled credential")
+	}
+
+	// 启用账号正常进入 tier
+	if enabledItem.Disabled {
+		t.Errorf("expected enabled credential Disabled=false")
+	}
+	if enabledItem.Priority != 100 {
+		t.Errorf("expected enabled credential Priority=100, got %d", enabledItem.Priority)
+	}
+
+	// 变更中绝不能有任何对 disabled 开关的改写
+	for _, change := range plan.Changes {
+		if change.Disabled != change.Credential.Disabled {
+			t.Errorf("change attempted to modify Disabled switch: %+v", change)
+		}
+		if change.Credential.AuthIndex == "auth-disabled-1" {
+			t.Errorf("unexpected change generated for user-disabled credential: %+v", change)
+		}
+	}
+}
+
+func TestPlanFreshOnly_DepletedQuota_DoesNotAlterDisabledState(t *testing.T) {
+	now := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	resetAt := now.Add(2 * time.Hour)
+	zeroRem := int64(0)
+
+	credentials := []core.Credential{
+		{
+			Name:      "claude-depleted",
+			AuthIndex: "auth-depleted-1",
+			Provider:  core.ProviderClaude,
+			Type:      core.CredentialTypeClaude,
+			Priority:  50,
+			Disabled:  false,
+		},
+	}
+
+	evidence := []ProbeEvidence{
+		{
+			Provider:      core.ProviderClaude,
+			AuthIndex:     "auth-depleted-1",
+			ObservedAt:    now,
+			ResetAt:       &resetAt,
+			Remaining:     &zeroRem,
+			Freshness:     core.FreshnessFresh,
+			ProbeStatus:   core.ProbeStatusReady,
+			Status:        EvidenceStatusReady,
+			PlanType:      core.PlanTypePro,
+			EvidenceFresh: true,
+		},
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
+	if len(plan.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(plan.Items))
+	}
+	item := plan.Items[0]
+	if item.Priority != 0 {
+		t.Errorf("expected priority 0 for depleted, got %d", item.Priority)
+	}
+	if item.Disabled {
+		t.Errorf("expected Disabled to remain false (must not auto-disable), got true")
+	}
+
+	if len(plan.Changes) != 1 {
+		t.Fatalf("expected 1 change, got %d", len(plan.Changes))
+	}
+	change := plan.Changes[0]
+	if change.Priority != 0 {
+		t.Errorf("expected change priority 0, got %d", change.Priority)
+	}
+	if change.Disabled != change.Credential.Disabled {
+		t.Errorf("expected change.Disabled (%t) == credential.Disabled (%t)", change.Disabled, change.Credential.Disabled)
+	}
+}
+
+func TestPlanFreshOnly_XAIAuthInvalid_DoesNotAlterDisabledState(t *testing.T) {
+	now := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
+	zeroRem := int64(0)
+
+	credentials := []core.Credential{
+		{
+			Name:      "xai-auth-invalid",
+			AuthIndex: "auth-xai-1",
+			Provider:  core.ProviderXAI,
+			Type:      core.CredentialTypeXAI,
+			Priority:  50,
+			Disabled:  false,
+		},
+	}
+
+	evidence := []ProbeEvidence{
+		{
+			Provider:      core.ProviderXAI,
+			AuthIndex:     "auth-xai-1",
+			ObservedAt:    now,
+			Remaining:     &zeroRem,
+			Freshness:     core.FreshnessFresh,
+			ProbeStatus:   core.ProbeStatusReady,
+			Status:        EvidenceStatusAuthInvalid,
+			PlanType:      core.PlanTypeFree,
+			EvidenceFresh: true,
+		},
+	}
+
+	plan := PlanFreshOnly(credentials, evidence, Options{Now: now, MaxPriority: 100})
+	if len(plan.Items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(plan.Items))
+	}
+	item := plan.Items[0]
+	if item.Priority != -1 {
+		t.Errorf("expected priority -1 for auth invalid, got %d", item.Priority)
+	}
+	if item.Disabled {
+		t.Errorf("expected Disabled to remain false (must not auto-disable), got true")
+	}
+
+	if len(plan.Changes) != 1 {
+		t.Fatalf("expected 1 change, got %d", len(plan.Changes))
+	}
+	change := plan.Changes[0]
+	if change.Priority != -1 {
+		t.Errorf("expected change priority -1, got %d", change.Priority)
+	}
+	if change.Disabled != change.Credential.Disabled {
+		t.Errorf("expected change.Disabled (%t) == credential.Disabled (%t)", change.Disabled, change.Credential.Disabled)
+	}
+}
+

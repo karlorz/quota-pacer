@@ -26,7 +26,7 @@ Quota Pacer（原 credential-priority）是面向 CLIProxyAPI (CPA) 的多提供
 - 通过宿主回调 `host.auth.list`、`host.auth.get`、`host.auth.get_runtime`、`host.auth.save` 复用 CPA 的凭证、代理和写入链路。
 - 只对本轮最新且可用的探测证据生成排序变更，避免用过期缓存调整凭证状态。
 - 当前支持 Antigravity、Codex、Claude 与 xAI 凭证在统一的全局优先级下协同调度。
-- **基于配速富余度的调度**：`remaining_headroom` 直接驱动每个账号的调度权重，允许超过 `1.0`；额度耗尽（`Remaining <= 0`）分配优先级 `0`；OAuth 失效（401）标记硬禁用。
+- **基于配速富余度的调度**：`remaining_headroom` 直接驱动每个账号的调度权重，允许超过 `1.0`；额度耗尽（`Remaining <= 0`）分配优先级 `0`；OAuth 失效（401）分配优先级 `-1`。Quota Pacer 绝不擅自修改用户的账号开关（启用/禁用状态）。
 - 状态页、诊断、快照与日志只输出脱敏后的凭证信息。
 - **配置管理**：通过 CPA **插件管理可视化配置字段**（`ConfigFields`）编辑，或直接修改 `config.yaml` / `plugins.configs.quota-pacer`。
 - **插件页**支持 Management Key 验证、概览（只读生效配置）、执行记录（近 5 次）、帮助，以及手动触发排序。
@@ -56,9 +56,9 @@ quota-pacer 面向的是 CPA 的 `weighted-round-robin` 调度策略：在同一
   -> 基于本轮 fresh 证据生成规划结果：
        - 正额度账号：由 `remaining_headroom` 驱动调度权重
        - 额度耗尽账号（Remaining <= 0）：Priority = 0, Reason = "fresh remaining depleted"
-       - 凭据失效（401）：Priority = -1, Disabled = true, Reason = "xai auth invalid"
+       - 凭据失效（401）：Priority = -1, Reason = "xai auth invalid"
   -> 根据运行模式决定是否写回：
-       - apply：通过 host.auth.save 写回优先级与启用状态
+       - apply：通过 host.auth.save 写回优先级与权重
        - preview / dry_run：仅更新状态、诊断、快照与日志
   -> 在管理页面展示脱敏后的统计、审计摘要与 Pacing 计算详情
 ```

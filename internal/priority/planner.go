@@ -67,7 +67,7 @@ const (
 	EvidenceStatusUnsupported EvidenceStatus = "unsupported"
 	// EvidenceStatusUnavailable 表示凭证当前不可用，必须保持现状。
 	EvidenceStatusUnavailable EvidenceStatus = "unavailable"
-	// EvidenceStatusAuthInvalid 表示 xAI OAuth 凭证失效，必须硬禁用。
+	// EvidenceStatusAuthInvalid 表示 xAI OAuth 凭证失效，降低优先级（Priority = -1），不改写账号开关。
 	EvidenceStatusAuthInvalid EvidenceStatus = "auth_invalid"
 )
 
@@ -188,13 +188,14 @@ func initialItems(credentials []core.Credential, freshByAuth map[string]ProbeEvi
 			item.NearestResetCreditExpiresAt = fresh.NearestResetCreditExpiresAt
 			item.EvidenceFresh = true
 
-			if isXAIAuthInvalid(credential, fresh) {
-				item.Priority = -1
-				item.Disabled = true
-				item.Reason = "xai auth invalid"
-			} else if fresh.Remaining != nil && *fresh.Remaining <= 0 {
-				item.Priority = 0
-				item.Reason = "fresh remaining depleted"
+			if !credential.Disabled {
+				if isXAIAuthInvalid(credential, fresh) {
+					item.Priority = -1
+					item.Reason = "xai auth invalid"
+				} else if fresh.Remaining != nil && *fresh.Remaining <= 0 {
+					item.Priority = 0
+					item.Reason = "fresh remaining depleted"
+				}
 			}
 		} else if cached, ok := cachedByAuth[credential.AuthIndex]; ok {
 			if cached.PlanType != core.PlanTypeUnknown && cached.PlanType != "" {
@@ -324,19 +325,17 @@ func planFreshPositive(items []PlanItem, options Options) {
 	for _, itemIndex := range candidates {
 		items[itemIndex].Priority = sharedPriority
 		items[itemIndex].Weight = weightFromHeadroom(weightHeadroom(items[itemIndex], options.Now))
-		// 禁用因额度耗尽的凭证，在探测到正向剩余额度后自动恢复启用并参与常规排序。
-		items[itemIndex].Disabled = false
 		items[itemIndex].Reason = "fresh remaining positive"
 	}
 }
 
 // isFreshPositiveTierMember reports whether item belongs to this round's
 // shared top-priority tier assigned by planFreshPositive (fresh evidence,
-// Remaining > 0). Multiple such items intentionally sharing the same
+// Remaining > 0, and not disabled by user). Multiple such items intentionally sharing the same
 // priority value is by design — see planFreshPositive and
 // ensureUniquePriorities — not a collision to correct.
 func isFreshPositiveTierMember(item PlanItem) bool {
-	return item.EvidenceFresh && item.Remaining != nil && *item.Remaining > 0
+	return !item.Disabled && item.EvidenceFresh && item.Remaining != nil && *item.Remaining > 0
 }
 
 // sharedTierPriority returns this round's shared top-priority value and
@@ -517,7 +516,7 @@ func planItemProvider(item PlanItem) core.Provider {
 func positiveCandidates(items []PlanItem) []int {
 	candidates := make([]int, 0, len(items))
 	for index, item := range items {
-		if !item.EvidenceFresh || item.Remaining == nil {
+		if item.Disabled || !item.EvidenceFresh || item.Remaining == nil {
 			continue
 		}
 		if *item.Remaining > 0 {
@@ -748,8 +747,8 @@ func shouldChange(item PlanItem, options Options) bool {
 	if item.Priority == item.Credential.Priority && item.Disabled == item.Credential.Disabled {
 		return false
 	}
-	if item.Priority == -1 && item.Disabled {
-		return item.Credential.Priority != -1 || !item.Credential.Disabled
+	if item.Priority <= 0 && item.Priority != item.Credential.Priority {
+		return true
 	}
 	if item.Credential.Disabled != item.Disabled {
 		return true

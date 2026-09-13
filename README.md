@@ -26,7 +26,7 @@ Quota Pacer (formerly credential-priority) is a CLIProxyAPI (CPA) plugin that au
 - Reuses CPA credential, proxy, and write-back flows through `host.auth.list`, `host.auth.get`, `host.auth.get_runtime`, and `host.auth.save`.
 - Generates priority changes only from fresh and ready evidence collected in the current probe run.
 - Currently supports Antigravity, Codex, Claude, and xAI credentials on a unified global priority scale.
-- **Headroom-based pacing**: `remaining_headroom` directly drives each credential’s scheduling weight, and values above `1.0` are valid. Depleted accounts (`Remaining <= 0`) receive Priority `0`; invalid OAuth credentials (401) are disabled.
+- **Headroom-based pacing**: `remaining_headroom` directly drives each credential’s scheduling weight, and values above `1.0` are valid. Depleted accounts (`Remaining <= 0`) receive Priority `0`; invalid OAuth credentials (401) receive Priority `-1`. Quota Pacer never alters account enabled/disabled switches.
 - Status pages, diagnostics, snapshots, and logs expose only redacted credential information.
 - **Configuration** is managed via CPA **Plugin Manager visual ConfigFields** (recommended), or host `config.yaml` / `plugins.configs.quota-pacer`.
 - **Plugin management page** supports Management Key verification, overview (read-only effective config), run history (last 5), help, and manual sorting triggers.
@@ -56,9 +56,9 @@ Load plugin
   -> Build a sorting plan only from fresh and ready evidence in this run:
        - Positive remaining quota: use `remaining_headroom` to drive scheduling weight
        - Depleted quota (Remaining <= 0): Priority = 0, Reason = "fresh remaining depleted"
-       - Auth invalid (401): Priority = -1, Disabled = true, Reason = "xai auth invalid"
+       - Auth invalid (401): Priority = -1, Reason = "xai auth invalid"
   -> Decide whether to write back by run mode:
-       - apply: write priority and enabled state through host.auth.save
+       - apply: write priority and weight through host.auth.save
        - preview / dry_run: update status, diagnostics, snapshot, and logs only
   -> Show redacted statistics, audit summary, and sorting result on the management page
 ```
