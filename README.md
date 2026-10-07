@@ -160,7 +160,7 @@ The plugin registers **resources** (static web UI) and **routes** (dynamic APIs)
 ### Resource Page (Static)
 
 - `GET /v0/resource/plugins/quota-pacer/status`
-  Returns a static HTML shell. The browser uses the Management Key for read-only data, run history, and management-path manual runs.
+  Returns a static HTML shell. Manual run and diagnostics send the CPA host management key (`Authorization: Bearer` / `X-Management-Key`), read from the CPAMC `cli-proxy-auth` session or the run-modal field.
 
 ### Management API (Dynamic, Key Required)
 

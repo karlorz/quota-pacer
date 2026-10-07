@@ -5,6 +5,28 @@ import (
 	"testing"
 )
 
+func TestStatusHTML_ExecuteSendsCPAManagementKey(t *testing.T) {
+	for _, want := range []string{
+		`id="managementKeyInput"`,
+		`function decodeCliProxyAuth(raw)`,
+		`function readCpaManagementKey()`,
+		`cli-proxy-auth`,
+		`enc::v1::`,
+		`cli-proxy-api-webui::secure-storage`,
+		`"Authorization":"Bearer "+key`,
+		`"X-Management-Key":key`,
+		`missingManagementKey`,
+		`fillManagementKeyInput()`,
+	} {
+		if !strings.Contains(StatusHTML, want) {
+			t.Errorf("status page missing management-key contract %q", want)
+		}
+	}
+	if strings.Contains(StatusHTML, `headers:{"Content-Type":"application/json",...((options&&options.headers)||{})}`) {
+		t.Fatal("status page still sends management fetches without the CPA key")
+	}
+}
+
 func TestStatusHTML_HeadroomTableShowsWeightAndResetCredit(t *testing.T) {
 	for _, want := range []string{
 		`data-i18n="colSchedulingWeight"`,
